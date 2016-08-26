@@ -1,8 +1,6 @@
 #include <stdio.h>  // fread, fclose, fprintf, stderr
 #include <string.h> // strcmp, memcpy
 
-#include <vector>
-
 #include "parser.h"
 
 using namespace glsl;
@@ -67,7 +65,7 @@ static void printBoolConstant(astBoolConstant *expression) {
     print("%s", expression->value ? "true" : "false");
 }
 
-static void printArraySize(const std::vector<astConstantExpression*> &arraySizes) {
+static void printArraySize(const vector<astConstantExpression*> &arraySizes) {
     for (size_t i = 0; i < arraySizes.size(); i++) {
         print("[");
         printExpression(arraySizes[i]);
@@ -160,7 +158,7 @@ static void printPrecision(int precision) {
 }
 
 static void printGlobalVariable(astGlobalVariable *variable) {
-    std::vector<astLayoutQualifier*> &qualifiers = variable->layoutQualifiers;
+    vector<astLayoutQualifier*> &qualifiers = variable->layoutQualifiers;
     if (variable->layoutQualifiers.size()) {
         print("layout (");
         for (size_t i = 0; i < qualifiers.size(); i++) {
@@ -243,7 +241,9 @@ static void printConstructorCall(astConstructorCall *expression) {
     print(")");
 }
 
-static void printFunctionVariable(astFunctionVariable *variable) {
+enum { kSemicolon = 1 << 0, kNewLine = 1 << 1, kDefault = kSemicolon | kNewLine };
+
+static void printFunctionVariable(astFunctionVariable *variable, int flags = kDefault ) {
     if (variable->isConst)
         print("const ");
     printVariable((astVariable*)variable);
@@ -251,7 +251,8 @@ static void printFunctionVariable(astFunctionVariable *variable) {
         print(" = ");
         printExpression(variable->initialValue);
     }
-    print(";\n");
+    if (flags & kSemicolon) print(";");
+    if (flags & kNewLine) print("\n");
 }
 
 static void printPostIncrement(astPostIncrementExpression *expression) {
@@ -386,14 +387,15 @@ static void printEmptyStatement() {
     print(";");
 }
 
-static void printDeclarationStatement(astDeclarationStatement *statement) {
+static void printDeclarationStatement(astDeclarationStatement *statement, int flags = kDefault) {
     for (size_t i = 0; i < statement->variables.size(); i++)
-        printFunctionVariable(statement->variables[i]);
+        printFunctionVariable(statement->variables[i], flags);
 }
 
-static void printExpressionStatement(astExpressionStatement *statement) {
+static void printExpressionStatement(astExpressionStatement *statement, int flags = kDefault) {
     printExpression(statement->expression);
-    print(";\n");
+    if (flags & kSemicolon) print(";");
+    if (flags & kNewLine) print("\n");
 }
 
 static void printIfStetement(astIfStatement *statement) {
@@ -430,13 +432,23 @@ static void printCaseLabelStatement(astCaseLabelStatement *statement) {
 
 static void printWhileStatement(astWhileStatement *statement) {
     print("while(");
-    printExpression((astExpression*)statement->condition);
+    switch (statement->condition->type) {
+    case astStatement::kDeclaration:
+        printDeclarationStatement((astDeclarationStatement*)statement->condition, false);
+        break;
+    case astStatement::kExpression:
+        printExpressionStatement((astExpressionStatement*)statement->condition, false);
+        break;
+    }
     print(")");
     printStatement(statement->body);
 }
 
 static void printDoStatement(astDoStatement *statement) {
     print("do");
+    // deal with non compound (i.e scope) in do loops, e.g: do function_call(); while(expr);
+    if (statement->body->type != astStatement::kCompound)
+        print(" ");
     printStatement(statement->body);
     print("while(");
     printExpression(statement->condition);
@@ -445,14 +457,27 @@ static void printDoStatement(astDoStatement *statement) {
 
 static void printForStatement(astForStatement *statement) {
     print("for(");
-    if (statement->init)
-        printExpression((astExpression*)statement->init);
-    print("; ");
-    if (statement->condition)
+    if (statement->init) {
+        switch (statement->init->type) {
+        case astStatement::kDeclaration:
+            printDeclarationStatement((astDeclarationStatement*)statement->init, kSemicolon);
+            break;
+        case astStatement::kExpression:
+            printExpressionStatement((astExpressionStatement*)statement->init, kSemicolon);
+            break;
+        }
+    } else {
+        print(";");
+    }
+    if (statement->condition) {
+        print(" ");
         printExpression(statement->condition);
-    print("; ");
-    if (statement->loop)
+    }
+    print(";");
+    if (statement->loop) {
+        print(" ");
         printExpression(statement->loop);
+    }
     print(")");
     printStatement(statement->body);
 }
@@ -570,7 +595,7 @@ struct sourceFile {
 
 int main(int argc, char **argv) {
     int shaderType = -1;
-    std::vector<sourceFile> sources;
+    vector<sourceFile> sources;
     while (argc > 1) {
         ++argv;
         --argc;
@@ -615,7 +640,7 @@ int main(int argc, char **argv) {
     }
 
     for (size_t i = 0; i < sources.size(); i++) {
-        std::vector<char> contents;
+        vector<char> contents;
         // Read contents of file
         if (sources[i].file != stdin) {
             fseek(sources[i].file, 0, SEEK_END);

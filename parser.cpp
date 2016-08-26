@@ -314,7 +314,7 @@ CHECK_RETURN astTU *parser::parse(int type) {
         if (isType(kType_eof))
             break;
 
-        std::vector<topLevel> items;
+        vector<topLevel> items;
         if (!parseTopLevel(items))
             return 0;
 
@@ -520,7 +520,7 @@ static struct {
 };
 
 CHECK_RETURN bool parser::parseLayout(topLevel &current) {
-    std::vector<astLayoutQualifier*> &qualifiers = current.layoutQualifiers;
+    vector<astLayoutQualifier*> &qualifiers = current.layoutQualifiers;
     if (isKeyword(kKeyword_layout)) {
         if (!next()) // skip 'layout'
             return false;
@@ -591,10 +591,14 @@ CHECK_RETURN bool parser::parseLayout(topLevel &current) {
 }
 
 CHECK_RETURN bool parser::parseTopLevelItem(topLevel &level, topLevel *continuation) {
-    std::vector<topLevel> items;
+    vector<topLevel> items;
     while (!isBuiltin() && !isType(kType_identifier)) {
-        topLevel next;
+        // If this is an empty file don't get caught in this loop indefinitely
+        token peek = m_lexer.peek();
+        if (IS_TYPE(peek, kType_eof))
+            return false;
 
+        topLevel next;
         if (continuation)
             next = *continuation;
 
@@ -623,8 +627,12 @@ CHECK_RETURN bool parser::parseTopLevelItem(topLevel &level, topLevel *continuat
         }
     }
 
-    if (continuation)
+    if (continuation) {
         level = *continuation;
+        // erase anything that is not an array size on the type, e.g
+        // int[2] a[2], b; should produce: int a[2][2]; int b[2];
+        level.arraySizes.erase(level.arraySizes.begin() + level.arrayOnTypeOffset, level.arraySizes.end());
+    }
 
     for (size_t i = 0; i < items.size(); i++) {
         topLevel &next = items[i];
@@ -724,6 +732,7 @@ CHECK_RETURN bool parser::parseTopLevelItem(topLevel &level, topLevel *continuat
                 if (!arraySize)
                     return false;
                 level.arraySizes.insert(level.arraySizes.begin(), arraySize);
+                level.arrayOnTypeOffset++;
                 if (!next()) // skip ']'
                     return false;
             }
@@ -782,7 +791,7 @@ CHECK_RETURN bool parser::parseTopLevelItem(topLevel &level, topLevel *continuat
     return true;
 }
 
-CHECK_RETURN bool parser::parseTopLevel(std::vector<topLevel> &items) {
+CHECK_RETURN bool parser::parseTopLevel(vector<topLevel> &items) {
     topLevel item;
     if (!parseTopLevelItem(item))
         return false;
@@ -817,7 +826,7 @@ CHECK_RETURN astStruct *parser::parseStruct() {
 
     if (!next()) return 0; // skip '{'
 
-    std::vector<topLevel> items;
+    vector<topLevel> items;
     while (!isType(kType_scope_end)) {
         if (!parseTopLevel(items))
             return 0;
@@ -1147,8 +1156,8 @@ CHECK_RETURN astSwitchStatement *parser::parseSwitchStatement() {
     if (!next()) // skip '{'
         return 0;
 
-    std::vector<int> seenInts;
-    std::vector<unsigned int> seenUInts;
+    vector<int> seenInts;
+    vector<unsigned int> seenUInts;
     bool hadDefault = false;
     while (!isType(kType_scope_end)) {
         astStatement *nextStatement = parseStatement();
@@ -1257,6 +1266,10 @@ CHECK_RETURN astBreakStatement *parser::parseBreakStatement() {
     astBreakStatement *statement = GC_NEW(astStatement) astBreakStatement();
     if (!next())
         return 0; // skip 'break'
+    if (!isType(kType_semicolon)) {
+        fatal("expected semicolon after break statement");
+        return 0;
+    }
     return statement;
 }
 
@@ -1264,6 +1277,10 @@ CHECK_RETURN astDiscardStatement *parser::parseDiscardStatement() {
     astDiscardStatement *statement = GC_NEW(astStatement) astDiscardStatement();
     if (!next()) // skip 'discard'
         return 0;
+    if (!isType(kType_semicolon)) {
+        fatal("expected semicolon after discard statement");
+        return 0;
+    }
     return statement;
 }
 
@@ -1274,6 +1291,10 @@ CHECK_RETURN astReturnStatement *parser::parseReturnStatement() {
     if (!isType(kType_semicolon)) {
         if (!(statement->expression = parseExpression(kEndConditionSemicolon)))
             return 0;
+        if (!isType(kType_semicolon)) {
+            fatal("expected semicolon after return statement");
+            return 0;
+        }
     }
     return statement;
 }
